@@ -44,7 +44,7 @@ static const InputBindingInfo s_bindings[] = {
 	{"RDown", TRANSLATE_NOOP("Pad", "Right Stick Down"), ICON_PF_RIGHT_ANALOG_DOWN, InputBindingInfo::Type::HalfAxis, PadDualshock2::Inputs::PAD_R_DOWN, GenericInputBinding::RightStickDown},
 	{"RLeft", TRANSLATE_NOOP("Pad", "Right Stick Left"), ICON_PF_RIGHT_ANALOG_LEFT, InputBindingInfo::Type::HalfAxis, PadDualshock2::Inputs::PAD_R_LEFT, GenericInputBinding::RightStickLeft},
 	{"LargeMotor", TRANSLATE_NOOP("Pad", "Large (Low Frequency) Motor"), nullptr, InputBindingInfo::Type::Motor, 0, GenericInputBinding::LargeMotor},
-	{"SmallMotor", TRANSLATE_NOOP("Pad", "Small (High Frequency) Motor"), nullptr, InputBindingInfo::Type::Motor, 1, GenericInputBinding::SmallMotor},
+	{"SmallMotor", TRANSLATE_NOOP("Pad", "Small (High Frequency) Motor"), nullptr, InputBindingInfo::Type::Motor, 0, GenericInputBinding::SmallMotor},
 	// clang-format on
 };
 
@@ -62,6 +62,9 @@ static const SettingInfo s_settings[] = {
 	{SettingInfo::Type::Float, "Deadzone", TRANSLATE_NOOP("Pad", "Analog Deadzone"),
 		TRANSLATE_NOOP(
 			"Pad", "Sets the analog stick deadzone, i.e. the fraction of the stick movement which will be ignored."),
+		"0.00", "0.00", "1.00", "0.01", TRANSLATE_NOOP("Pad", "%.0f%%"), nullptr, nullptr, 100.0f},
+	{SettingInfo::Type::Float, "AntiDeadzone", TRANSLATE_NOOP("Pad", "Analog Anti-Deadzone"),
+		TRANSLATE_NOOP("Pad", "Sets the minimum analog stick output after movement exceeds the deadzone."),
 		"0.00", "0.00", "1.00", "0.01", TRANSLATE_NOOP("Pad", "%.0f%%"), nullptr, nullptr, 100.0f},
 	{SettingInfo::Type::Float, "AxisScale", TRANSLATE_NOOP("Pad", "Analog Sensitivity"),
 		TRANSLATE_NOOP("Pad",
@@ -82,6 +85,9 @@ static const SettingInfo s_settings[] = {
 	{SettingInfo::Type::Float, "ButtonDeadzone", TRANSLATE_NOOP("Pad", "Button/Trigger Deadzone"),
 		TRANSLATE_NOOP("Pad", "Sets the deadzone for activating buttons/triggers, i.e. the fraction of the trigger "
 							  "which will be ignored."),
+		"0.00", "0.00", "1.00", "0.01", TRANSLATE_NOOP("Pad", "%.0f%%"), nullptr, nullptr, 100.0f},
+	{SettingInfo::Type::Float, "TriggerAntiDeadzone", TRANSLATE_NOOP("Pad", "Trigger Anti-Deadzone"),
+		TRANSLATE_NOOP("Pad", "Sets the minimum L2/R2 output after the trigger exceeds the button/trigger deadzone."),
 		"0.00", "0.00", "1.00", "0.01", TRANSLATE_NOOP("Pad", "%.0f%%"), nullptr, nullptr, 100.0f},
 	{SettingInfo::Type::Float, "PressureModifier", TRANSLATE_NOOP("Pad", "Pressure Modifier Amount"),
 		TRANSLATE_NOOP("Pad", "Sets the pressure when the modifier button is held."), "0.50", "0.01", "1.00", "0.01",
@@ -578,111 +584,112 @@ void PadDualshock2::Set(u32 index, float value)
 		// Normal mode : expect value 0  -> 80 -> FF
 		// Reverse mode: expect value FF -> 7F -> 0
 
-		// merge left/right or up/down into rx or ry
+		// Merge left/right or up/down into a single signed axis in the range [-1, 1].
+		const auto mergeAxis = [this](u32 positive, u32 negative) {
+			return (this->rawInputs[positive] != 0) ?
+				(static_cast<float>(this->rawInputs[positive]) / 255.0f) :
+				(static_cast<float>(this->rawInputs[negative]) / -255.0f);
+		};
 
-#define MERGE(pos, neg) ((this->rawInputs[pos] != 0) ? (127u + ((this->rawInputs[pos] + 1u) / 2u)) : (127u - (this->rawInputs[neg] / 2u)))
-		if (index <= Inputs::PAD_L_LEFT)
+		const bool isLeftStick = (index <= Inputs::PAD_L_LEFT);
+		float posX;
+		float posY;
+		if (isLeftStick)
 		{
 			// Left Stick
-			const u8 combinedX = this->analogs.lxInvert ? MERGE(Inputs::PAD_L_LEFT, Inputs::PAD_L_RIGHT) : MERGE(Inputs::PAD_L_RIGHT, Inputs::PAD_L_LEFT);
-			const u8 combinedY = this->analogs.lyInvert ? MERGE(Inputs::PAD_L_UP, Inputs::PAD_L_DOWN) : MERGE(Inputs::PAD_L_DOWN, Inputs::PAD_L_UP);
-
-			if (this->useDiagonalScaleCorrection)
-			{
-				const float normalizedX = (combinedX - 127.5) / 127.5f;
-				const float normalizedY = (combinedY - 127.5) / 127.5f;
-				const float magnitude = std::sqrt((normalizedX * normalizedX) + (normalizedY * normalizedY));
-				const float max = std::max(std::abs(normalizedX), std::abs(normalizedY));
-				const float scaledX = (normalizedX / max) * std::min(magnitude, 1.0f);
-				const float scaledY = (normalizedY / max) * std::min(magnitude, 1.0f);
-				this->analogs.lx = (scaledX * 127.5) + 127.5;
-				this->analogs.ly = (scaledY * 127.5) + 127.5;
-			}
-			else
-			{
-				this->analogs.lx = combinedX;
-				this->analogs.ly = combinedY;
-			}
+			posX = this->analogs.lxInvert ? mergeAxis(Inputs::PAD_L_LEFT, Inputs::PAD_L_RIGHT) :
+				mergeAxis(Inputs::PAD_L_RIGHT, Inputs::PAD_L_LEFT);
+			posY = this->analogs.lyInvert ? mergeAxis(Inputs::PAD_L_UP, Inputs::PAD_L_DOWN) :
+				mergeAxis(Inputs::PAD_L_DOWN, Inputs::PAD_L_UP);
 		}
 		else
 		{
 			// Right Stick
-			const u8 combinedX = this->analogs.rxInvert ? MERGE(Inputs::PAD_R_LEFT, Inputs::PAD_R_RIGHT) : MERGE(Inputs::PAD_R_RIGHT, Inputs::PAD_R_LEFT);
-			const u8 combinedY = this->analogs.ryInvert ? MERGE(Inputs::PAD_R_UP, Inputs::PAD_R_DOWN) : MERGE(Inputs::PAD_R_DOWN, Inputs::PAD_R_UP);
-
-			if (this->useDiagonalScaleCorrection)
-			{
-				const float normalizedX = (combinedX - 127.5) / 127.5f;
-				const float normalizedY = (combinedY - 127.5) / 127.5f;
-				const float magnitude = std::sqrt((normalizedX * normalizedX) + (normalizedY * normalizedY));
-				const float max = std::max(std::abs(normalizedX), std::abs(normalizedY));
-				const float scaledX = (normalizedX / max) * std::min(magnitude, 1.0f);
-				const float scaledY = (normalizedY / max) * std::min(magnitude, 1.0f);
-				this->analogs.rx = (scaledX * 127.5) + 127.5;
-				this->analogs.ry = (scaledY * 127.5) + 127.5;
-			}
-			else
-			{
-				this->analogs.rx = combinedX;
-				this->analogs.ry = combinedY;
-			}
+			posX = this->analogs.rxInvert ? mergeAxis(Inputs::PAD_R_LEFT, Inputs::PAD_R_RIGHT) :
+				mergeAxis(Inputs::PAD_R_RIGHT, Inputs::PAD_R_LEFT);
+			posY = this->analogs.ryInvert ? mergeAxis(Inputs::PAD_R_UP, Inputs::PAD_R_DOWN) :
+				mergeAxis(Inputs::PAD_R_DOWN, Inputs::PAD_R_UP);
 		}
-#undef MERGE
 
-		// Deadzone computation.
+		// Deadzone, diagonal scale correction and anti-deadzone computation.
 		const float dz = this->axisDeadzone;
+		const float adz = this->axisAntiDeadzone;
 
-		if (dz > 0.0f)
+		// No point processing if we're at dead center (usually keyboard with no buttons pressed).
+		if (posX != 0.0f || posY != 0.0f)
 		{
-#define MERGE_F(pos, neg) ((this->rawInputs[pos] != 0) ? (static_cast<float>(this->rawInputs[pos]) / 255.0f) : (static_cast<float>(this->rawInputs[neg]) / -255.0f))
-			float posX, posY;
-			if (index <= Inputs::PAD_L_LEFT)
+			if (std::hypot(posX, posY) <= dz)
 			{
-				posX = this->analogs.lxInvert ? MERGE_F(Inputs::PAD_L_LEFT, Inputs::PAD_L_RIGHT) : MERGE_F(Inputs::PAD_L_RIGHT, Inputs::PAD_L_LEFT);
-				posY = this->analogs.lyInvert ? MERGE_F(Inputs::PAD_L_UP, Inputs::PAD_L_DOWN) : MERGE_F(Inputs::PAD_L_DOWN, Inputs::PAD_L_UP);
+				// In deadzone. Set to center.
+				posX = 0.0f;
+				posY = 0.0f;
 			}
 			else
 			{
-				posX = this->analogs.rxInvert ? MERGE_F(Inputs::PAD_R_LEFT, Inputs::PAD_R_RIGHT) : MERGE_F(Inputs::PAD_R_RIGHT, Inputs::PAD_R_LEFT);
-				posY = this->analogs.ryInvert ? MERGE_F(Inputs::PAD_R_UP, Inputs::PAD_R_DOWN) : MERGE_F(Inputs::PAD_R_DOWN, Inputs::PAD_R_UP);
-			}
-
-			// No point checking if we're at dead center (usually keyboard with no buttons pressed).
-			if (posX != 0.0f || posY != 0.0f)
-			{
-				// Compute the angle at the given position in the stick's square bounding box.
-				const float theta = std::atan2(posY, posX);
-
-				// Compute the position that the edge of the circle would be at, given the angle.
-				const float dzX = std::cos(theta) * dz;
-				const float dzY = std::sin(theta) * dz;
-
-				// We're in the deadzone if our position is less than the circle edge.
-				const bool inX = (posX < 0.0f) ? (posX > dzX) : (posX <= dzX);
-				const bool inY = (posY < 0.0f) ? (posY > dzY) : (posY <= dzY);
-				
-				if (inX && inY)
+				if (this->useDiagonalScaleCorrection)
 				{
-					// In deadzone. Set to 127 (center).
-					if (index <= Inputs::PAD_L_LEFT)
+					// Transform the pickup zone from a square to a circle, allowing full input at the diagonals.
+					const float magnitude = std::hypot(posX, posY);
+					const float maxAxis = std::max(std::abs(posX), std::abs(posY));
+					const float correction = std::min(magnitude, 1.0f) / maxAxis;
+					posX *= correction;
+					posY *= correction;
+				}
+
+				if (adz > 0.0f)
+				{
+					// Remap from the deadzone edge to the edge of the stick's square range, so that the output starts at
+					// the anti-deadzone instead of zero. The anti-deadzone is scaled by the directional maximum so that
+					// its percentage is consistent at all angles.
+					const float magnitude = std::hypot(posX, posY);
+					const float directionX = posX / magnitude;
+					const float directionY = posY / magnitude;
+					const float maximumMagnitude = 1.0f / std::max(std::abs(directionX), std::abs(directionY));
+					const float minimumMagnitude = std::max(dz, adz * maximumMagnitude);
+					const float magnitudeRange = maximumMagnitude - dz;
+					if (minimumMagnitude > dz && magnitudeRange > 0.0f)
 					{
-						this->analogs.lx = this->analogs.ly = 127;
+						const float normalizedMagnitude = std::clamp((magnitude - dz) / magnitudeRange, 0.0f, 1.0f);
+						const float outputMagnitude = std::lerp(minimumMagnitude, maximumMagnitude, normalizedMagnitude);
+						posX = directionX * outputMagnitude;
+						posY = directionY * outputMagnitude;
 					}
-					else
-					{
-						this->analogs.rx = this->analogs.ry = 127;
-					}	
 				}
 			}
-#undef MERGE_F
+		}
+
+		// Convert back to the 0-255 range expected by the PS2 (127 is center).
+		const auto convertAxis = [](float axis) {
+			const u8 raw = static_cast<u8>(std::lroundf(std::clamp(std::abs(axis) * 255.0f, 0.0f, 255.0f)));
+			return static_cast<u8>((axis >= 0.0f) ? (127u + ((raw + 1u) / 2u)) : (127u - (raw / 2u)));
+		};
+		if (isLeftStick)
+		{
+			this->analogs.lx = convertAxis(posX);
+			this->analogs.ly = convertAxis(posY);
+		}
+		else
+		{
+			this->analogs.rx = convertAxis(posX);
+			this->analogs.ry = convertAxis(posY);
 		}
 	}
 	else if (IsTriggerKey(index))
 	{
 		const float s_value = std::clamp(value, 0.0f, 1.0f);
-		const float dz_value = (this->buttonDeadzone > 0.0f && s_value < this->buttonDeadzone) ? 0.0f : s_value;
-		this->rawInputs[index] = static_cast<u8>(dz_value * 255.0f);
-		if (dz_value > 0.0f)
+		float output_value = (s_value >= this->buttonDeadzone) ? s_value : 0.0f;
+
+		// Anti-deadzone: remap from the trigger deadzone edge so the output starts at the anti-deadzone instead of zero.
+		const float minimum_value = std::max(this->buttonDeadzone, this->triggerAntiDeadzone);
+		if (output_value > 0.0f && minimum_value > this->buttonDeadzone)
+		{
+			const float normalized_value = (this->buttonDeadzone >= 1.0f) ?
+				1.0f : (s_value - this->buttonDeadzone) / (1.0f - this->buttonDeadzone);
+			output_value = std::lerp(minimum_value, 1.0f, normalized_value);
+		}
+
+		this->rawInputs[index] = static_cast<u8>(std::clamp(output_value * 255.0f, 0.0f, 255.0f));
+		if (output_value > 0.0f)
 			this->buttons &= ~(1u << bitmaskMapping[index]);
 		else
 			this->buttons |= (1u << bitmaskMapping[index]);
@@ -777,8 +784,13 @@ void PadDualshock2::SetRawPressureButton(u32 index, const std::tuple<bool, u8> v
 
 void PadDualshock2::SetAxisScale(float deadzone, float scale)
 {
-	this->axisDeadzone = deadzone;
+	this->axisDeadzone = std::clamp(deadzone, 0.0f, 1.0f);
 	this->axisScale = scale;
+}
+
+void PadDualshock2::SetAxisAntiDeadzone(float anti_deadzone)
+{
+	this->axisAntiDeadzone = std::clamp(anti_deadzone, 0.0f, 1.0f);
 }
 
 void PadDualshock2::SetDiagonalScaleCorrection(bool enabled)
@@ -808,7 +820,12 @@ void PadDualshock2::SetPressureModifier(float mod)
 
 void PadDualshock2::SetButtonDeadzone(float deadzone)
 {
-	this->buttonDeadzone = deadzone;
+	this->buttonDeadzone = std::clamp(deadzone, 0.0f, 1.0f);
+}
+
+void PadDualshock2::SetTriggerAntiDeadzone(float anti_deadzone)
+{
+	this->triggerAntiDeadzone = std::clamp(anti_deadzone, 0.0f, 1.0f);
 }
 
 void PadDualshock2::SetAnalogInvertL(bool x, bool y)
