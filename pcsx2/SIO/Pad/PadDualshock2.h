@@ -72,6 +72,8 @@ private:
 	std::array<u8, VIBRATION_MOTORS> vibrationMotors = {};
 	float axisScale = 1.0f;
 	float axisDeadzone = 0.0f;
+	// Minimum stick output once movement exceeds the deadzone, as a fraction of full range.
+	float axisAntiDeadzone = 0.0f;
 	// Determines if inputs from the host should be corrected from square pickup zone to circular
 	bool useDiagonalScaleCorrection = false;
 	std::array<float, 2> vibrationScale = {1.0f, 1.0f};
@@ -80,6 +82,8 @@ private:
 	// a way to simulate pressure sensitive controls.
 	float pressureModifier = 0.5f;
 	float buttonDeadzone = 0.0f;
+	// Minimum L2/R2 output once the trigger exceeds the button/trigger deadzone.
+	float triggerAntiDeadzone = 0.0f;
 	// Used to store the last vibration mapping request the PS2 made for the small motor.
 	u8 smallMotorLastConfig = 0xff;
 	// Used to store the last vibration mapping request the PS2 made for the large motor.
@@ -143,6 +147,8 @@ public:
 	void SetRawPressureButton(u32 index, const std::tuple<bool, u8> value) override;
 	void SetAxisScale(float deadzone, float scale) override;
 	void SetDiagonalScaleCorrection(bool enabled) override;
+	void SetAxisAntiDeadzone(float anti_deadzone) override;
+	void SetTriggerAntiDeadzone(float anti_deadzone) override;
 	float GetVibrationScale(u32 motor) const override;
 	void SetVibrationScale(u32 motor, float scale) override;
 	float GetPressureModifier() const override;
